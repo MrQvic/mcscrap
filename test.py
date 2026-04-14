@@ -8,7 +8,7 @@ Run: python test.py
 from scrapers.models import VoteInfo
 from scrapers.sites import CraftList, CzechCraft, MinecraftList, MinecraftServery
 
-NICK = "Safiron8"
+NICK = "nick"
 
 SITES = [
     MinecraftServery(server_slug="goldskyblock-1171"),
