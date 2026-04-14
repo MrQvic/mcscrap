@@ -5,6 +5,7 @@ from html import unescape
 from playwright.sync_api import BrowserContext
 
 from ..http import http_get
+from ..config import CAPTCHA_TIMEOUT_MS
 from ..models import VoteInfo
 
 VOTERS_URL = "https://minecraftservery.eu/voters/{server_slug}"
@@ -18,8 +19,7 @@ VOTE_BUTTON_SELECTOR = "#app > main > div.columns > div:nth-child(2) > div > div
 TURNSTILE_IFRAME = 'iframe[src*="challenges.cloudflare.com"]'
 TURNSTILE_RESPONSE_INPUT_NAME = "cf-turnstile-response"
 
-# Max time we wait for Turnstile to be solved.
-CAPTCHA_TIMEOUT_MS = 12_000
+# Max time we wait for Turnstile to be solved — configured via CAPTCHA_TIMEOUT_MS in .env.
 
 
 class MinecraftServery:

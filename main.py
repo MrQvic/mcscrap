@@ -1,13 +1,17 @@
+import os
 import time
 from datetime import datetime, timedelta
 
+from dotenv import load_dotenv
 from patchright.sync_api import sync_playwright
 
 from scrapers.browser import BrowserManager
 from scrapers.models import VoteInfo
 from scrapers.sites import CraftList, CzechCraft, MinecraftList, MinecraftServery
 
-NICK = "MrKvic_"
+load_dotenv()
+
+NICK = os.getenv("NICK") or "MrKvic_"
 
 
 def main() -> None:

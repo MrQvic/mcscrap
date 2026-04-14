@@ -8,6 +8,7 @@ from playwright.sync_api import BrowserContext
 
 from ..http import AJAX_HEADERS, http_get
 from ..models import VoteInfo
+from ..config import CAPTCHA_TIMEOUT_MS
 
 VOTERS_URL = (
     "https://craftlist.org/{server_slug}/voters"
@@ -20,7 +21,7 @@ RECAPTCHA_CHECKED = '#recaptcha-anchor.recaptcha-checkbox-checked'
 VOTE_BUTTON_SELECTOR = 'button[data-lfv-message-id="frm-voteForm-_submit_message"]'
 
 # Max time we wait for the captcha to be solved (by Nopecha, or manually in debug).
-CAPTCHA_TIMEOUT_MS = 12_000
+# Max time we wait for the captcha to be solved — configured via CAPTCHA_TIMEOUT_MS in .env.
 
 # Cooldown between two votes on craftlist.org. Used to compute next_vote_at
 # from the timestamp of the player's most recent vote shown in the voter table.

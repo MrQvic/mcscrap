@@ -6,6 +6,7 @@ from playwright.sync_api import BrowserContext
 
 from ..http import http_get
 from ..models import VoteInfo
+from ..config import CAPTCHA_TIMEOUT_MS
 
 API_URL = "https://www.minecraft-list.cz/api/server/{server_slug}/player/{nickname}"
 VOTE_URL = "https://www.minecraft-list.cz/server/{server_slug}/vote?name={nickname}"
@@ -24,7 +25,7 @@ VOTE_BUTTON_SELECTOR = (
 VOTE_ALERT_SELECTOR = '//*[@id="about"]/div/div[1]/div'
 
 # Max time we wait for the captcha to be solved (by Nopecha, or manually in debug).
-CAPTCHA_TIMEOUT_MS = 12_000
+# Max time we wait for the captcha to be solved — configured via CAPTCHA_TIMEOUT_MS in .env.
 
 
 class MinecraftList:

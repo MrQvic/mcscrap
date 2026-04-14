@@ -5,6 +5,7 @@ import httpx
 from playwright.sync_api import BrowserContext
 
 from ..http import http_get
+from ..config import CAPTCHA_TIMEOUT_MS
 from ..models import VoteInfo
 
 API_URL = "https://czech-craft.eu/api/server/{server_slug}/player/{nickname}/"
@@ -16,8 +17,7 @@ RECAPTCHA_IFRAME = 'iframe[title="reCAPTCHA"]'
 RECAPTCHA_CHECKED = "#recaptcha-anchor.recaptcha-checkbox-checked"
 VOTE_BUTTON_SELECTOR = "body > div.container > div.container-left > div > form > button"
 
-# Max time we wait for the captcha to be solved (by Nopecha, or manually in debug).
-CAPTCHA_TIMEOUT_MS = 12_000
+# Max time we wait for the captcha to be solved — configured via CAPTCHA_TIMEOUT_MS in .env.
 
 # Format of the `next_vote` field in the API response. Naive local time in the
 # server's timezone (CET/CEST). See module README note on tz assumptions.
