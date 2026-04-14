@@ -47,7 +47,7 @@ sudo apt install xvfb
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/mrkvic/mcscrap.git
+git clone https://github.com/mrqvic/mcscrap.git
 cd mcscrap
 ```
 
