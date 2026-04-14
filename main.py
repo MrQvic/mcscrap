@@ -11,7 +11,7 @@ from scrapers.sites import CraftList, CzechCraft, MinecraftList, MinecraftServer
 
 load_dotenv()
 
-NICK = os.getenv("NICK") or "MrKvic_"
+NICK = os.getenv("NICK")
 
 
 def main() -> None:
