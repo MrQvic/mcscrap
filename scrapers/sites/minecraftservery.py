@@ -1,0 +1,141 @@
+import json
+import re
+from html import unescape
+
+from playwright.sync_api import BrowserContext
+
+from ..http import http_get
+from ..models import VoteInfo
+
+VOTERS_URL = "https://minecraftservery.eu/voters/{server_slug}"
+VOTE_URL = "https://minecraftservery.eu/server/{server_slug}/vote/{nickname}"
+
+# Selectors for the vote page. Placeholders — fill in after inspecting the page.
+VOTE_BUTTON_SELECTOR = "#app > main > div.columns > div:nth-child(2) > div > div.modal-card > footer > div > div > button.button.is-primary.has-text-weight-medium"
+
+# Turnstile uses a hidden input that gets populated with a JWT-like token once
+# the challenge is solved (by NopeCHA, or by a human in debug mode).
+TURNSTILE_IFRAME = 'iframe[src*="challenges.cloudflare.com"]'
+TURNSTILE_RESPONSE_INPUT_NAME = "cf-turnstile-response"
+
+# Max time we wait for Turnstile to be solved.
+CAPTCHA_TIMEOUT_MS = 12_000
+
+
+class MinecraftServery:
+    """
+    Site adapter for minecraftservery.eu.
+
+    Phase A: scrape voters JSON embedded in the voters page HTML.
+    Phase B: TODO — open vote page, solve captcha, submit, verify success.
+    """
+
+    def __init__(self, server_slug: str):
+        self.server_slug = server_slug
+
+    def get_vote_info(self, nickname: str) -> VoteInfo | None:
+        html = http_get(VOTERS_URL.format(server_slug=self.server_slug))
+
+        # The page embeds a JSON blob like `"voters":[{"nickname":"...","count":N}, ...]`
+        # inside an HTML-escaped script tag, so we unescape first and regex it out.
+        match = re.search(r'"voters":(\[.*?\])', unescape(html))
+        if not match:
+            raise ValueError("Could not find voters data in page content.")
+
+        voters: list[dict] = json.loads(match.group(1))
+        for player in voters:
+            if player["nickname"] == nickname:
+                # Site does not expose next-vote time anywhere on the voters page.
+                return VoteInfo(votes=player["count"], next_vote_at=None)
+
+        return VoteInfo(votes=0, next_vote_at=None)
+
+    def _assert_on_vote_page(self, page, expected_url: str) -> None:
+        """
+        Defensive check: verify we actually landed on the vote page.
+
+        Raises RuntimeError immediately (before captcha wait) if either the URL
+        is wrong or the vote button is missing — avoids wasting captcha timeout
+        when the page is broken or redirected somewhere unexpected.
+        """
+        if page.url != expected_url and self.server_slug not in page.url:
+            raise RuntimeError(
+                f"[MinecraftServery] Unexpected redirect: expected URL containing "
+                f"'{self.server_slug}', got '{page.url}'"
+            )
+
+        try:
+            page.wait_for_selector(VOTE_BUTTON_SELECTOR, timeout=2_000)
+        except Exception:
+            raise RuntimeError(
+                f"[MinecraftServery] Vote button not found on page '{page.url}' — "
+                "page may be broken or layout changed."
+            )
+
+    def vote(self, context: BrowserContext, nickname: str) -> bool:
+        """
+        Phase B: cast a vote for `nickname` using the shared browser context.
+
+        Flow:
+          1. Open the vote page with nickname in the query string.
+          2. Defensive check: assert we're on the correct page with the vote button present.
+          3. Wait for the Turnstile iframe to be present (widget loaded).
+          4. Wait until the hidden `cf-turnstile-response` input holds a
+             non-empty token — this is the canonical signal that NopeCHA
+             (or a human in debug mode) solved the challenge. CSS cannot
+             observe the live `value` property, so we poll via JS.
+          5. Click the vote/submit button.
+          6. TODO: verify success. User mentioned some popup appears after
+             a successful vote — wire up a real check once observed. For
+             now returns True unconditionally after the click.
+        """
+        page = context.new_page()
+        try:
+            url = VOTE_URL.format(server_slug=self.server_slug, nickname=nickname)
+            print(f"[MinecraftServery] navigating to {url}")
+            page.goto(url, wait_until="networkidle")
+
+            print("[MinecraftServery] asserting we are on the vote page")
+            self._assert_on_vote_page(page, url)
+
+            print("[MinecraftServery] waiting for Turnstile iframe")
+            page.wait_for_selector(TURNSTILE_IFRAME, timeout=7_000)
+
+            print("[MinecraftServery] waiting for Turnstile to be solved")
+            page.wait_for_function(
+                """(inputName) => {
+                    const el = document.querySelector(`input[name="${inputName}"]`);
+                    return el && el.value && el.value.length > 20;
+                }""",
+                arg=TURNSTILE_RESPONSE_INPUT_NAME,
+                timeout=CAPTCHA_TIMEOUT_MS,
+            )
+
+            print("[MinecraftServery] clicking vote button")
+            page.click(VOTE_BUTTON_SELECTOR)
+
+            print("[MinecraftServery] vote button clicked, waiting for popup")
+            try:
+                page.wait_for_selector("div.notification", timeout=5_000)
+                notification_text = page.locator("div.notification").first.text_content() or ""
+
+                if "Hlasovat můžete až v" in notification_text:
+                    print("[MinecraftServery] vote on cooldown.")
+                    return True
+                elif "byl úspěšně odeslán" in notification_text:
+                    print("[MinecraftServery] vote successful.")
+                    return True
+                elif "Pole captcha je povinné" in notification_text:
+                    print("[MinecraftServery] captcha bypass unsuccessful.")
+                    return False
+                else:
+                    print(f"[MinecraftServery] unknown popup text: '{notification_text.strip()}'")
+                    return False
+
+            except Exception:
+                print("[MinecraftServery] no notification popup detected after click.")
+                return False
+        finally:
+            page.close()
+
+#

@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Environment variables - never commit this
+.env
+
+# Chrome profile persists extension state and cookies - not for VCS
+.chrome_profile/

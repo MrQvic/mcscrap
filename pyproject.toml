@@ -1,0 +1,15 @@
+[project]
+name = "mcscrap"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "playwright",
+    "patchright",
+    "python-dotenv",
+    "requests",
+    "beautifulsoup4",
+    "httpx",
+    "PyVirtualDisplay",
+    "xvfbwrapper",
+    "docopt",
+]
