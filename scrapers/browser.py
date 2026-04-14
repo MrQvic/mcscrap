@@ -6,6 +6,8 @@ from typing import Optional
 from dotenv import load_dotenv
 from patchright.sync_api import BrowserContext, Playwright
 
+from .nopecha import verify_api_key
+
 load_dotenv()
 
 # Path to the unpacked Nopecha extension directory (must contain manifest.json)
@@ -51,6 +53,10 @@ class BrowserManager:
                     f"Nopecha extension not found at: {NOPECHA_EXTENSION_PATH}\n"
                     "Download from https://github.com/nopecha/nopecha-chrome and unpack there."
                 )
+
+            # Sanity check the key against the NopeCHA backend BEFORE spinning up
+            # Chromium / Xvfb. Fails fast on bad keys, expired plans, banned IPs, etc.
+            verify_api_key(api_key)
 
         if not debug:
             # Start virtual framebuffer - browser renders into it invisibly
@@ -104,16 +110,30 @@ class BrowserManager:
         """
         Injects the Nopecha API key using their official setup URL.
         The extension reads the key from the URL hash and saves it to storage.
+
+        Verifies the injection by checking that the setup page rendered its
+        success state ("Imported settings:" text) — if not, the extension's
+        content script never ran or never wrote to chrome.storage, and we
+        should fail loudly instead of silently relying on a stale key.
         """
         page = self.context.new_page()
         try:
             page.goto(
                 f"https://nopecha.com/setup#{api_key}",
                 wait_until="load",
-                timeout=3_000,
+                timeout=10_000,
             )
             # Give the content script time to read the hash and persist it to chrome.storage.
             # domcontentloaded/load fire before async storage writes complete, so we need to wait.
             page.wait_for_timeout(1000)
+
+            # The setup.js content script renders "Imported settings:" on success
+            # and "Invalid URL" on failure. Anything else means the script never ran.
+            if not page.get_by_text("Imported settings").is_visible():
+                raise RuntimeError(
+                    "NopeCHA key injection failed: setup page did not render the success "
+                    "state. The extension content script may not have executed, or the "
+                    "key format may be invalid."
+                )
         finally:
             page.close()
