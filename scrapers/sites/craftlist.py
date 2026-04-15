@@ -20,6 +20,11 @@ RECAPTCHA_IFRAME = 'iframe[title="reCAPTCHA"]'
 RECAPTCHA_CHECKED = '#recaptcha-anchor.recaptcha-checkbox-checked'
 VOTE_BUTTON_SELECTOR = 'button[data-lfv-message-id="frm-voteForm-_submit_message"]'
 
+# Cookie consent banner — appears on first visit, then persisted in the Chrome
+# profile. We target the stable attributes (class + data-role), not the brittle
+# nth-child path that DevTools "Copy selector" produces.
+COOKIE_ACCEPT_BUTTON = 'button.cm__btn[data-role="all"]'
+
 # Max time we wait for the captcha to be solved (by Nopecha, or manually in debug).
 # Max time we wait for the captcha to be solved — configured via CAPTCHA_TIMEOUT_MS in .env.
 
@@ -108,6 +113,24 @@ class CraftList:
                 "page may be broken or layout changed."
             )
 
+    def _dismiss_cookie_banner(self, page) -> None:
+        """
+        Click the "Povolit všechny" cookie consent button if the banner is present.
+
+        On first visit the banner overlays the page and can block clicks on the
+        vote button or captcha. After acceptance, craftlist persists the choice
+        in cookies stored in our .chrome_profile/, so subsequent runs won't show
+        the banner at all — the short timeout below makes that fast-path cheap.
+        """
+        try:
+            # Short timeout: on repeat runs the banner is gone and we don't want
+            # to block for long. Playwright's click() auto-waits for visible+enabled.
+            page.locator(COOKIE_ACCEPT_BUTTON).click(timeout=2_000)
+            print("[CraftList] cookie banner dismissed")
+        except Exception:
+            # Banner not present (already accepted in a previous run) — fine.
+            pass
+
     def vote(self, context: BrowserContext, nickname: str) -> bool:
         """
         Phase B: cast a vote for `nickname` using the shared browser context.
@@ -129,6 +152,8 @@ class CraftList:
             url = VOTE_URL.format(server_slug=self.server_slug, nickname=nickname)
             print(f"[CraftList] navigating to {url}")
             page.goto(url, wait_until="networkidle")
+
+            self._dismiss_cookie_banner(page)
 
             print("[CraftList] asserting we are on the vote page")
             self._assert_on_vote_page(page, url)
