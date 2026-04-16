@@ -101,10 +101,21 @@ class BrowserManager:
         return self.context
 
     def __exit__(self, *_):
+        # Cleanup must never raise — when Ctrl+C interrupts a sleep inside
+        # the with-block, the patchright driver's connection may already be
+        # torn down, and self.context.close() raises "Connection closed
+        # while reading from the driver". Swallowing the error here lets
+        # KeyboardInterrupt propagate cleanly to the main loop's handler.
         if self.context:
-            self.context.close()
+            try:
+                self.context.close()
+            except Exception:
+                pass
         if self._display:
-            self._display.stop()
+            try:
+                self._display.stop()
+            except Exception:
+                pass
 
     def _inject_api_key(self, api_key: str) -> None:
         """

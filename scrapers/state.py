@@ -1,9 +1,14 @@
 """
-Persistence of last-vote timestamps per site.
+Persistence of next-vote timestamps per site.
 
-Used primarily as a fallback for sites that don't expose `next_vote_at`
-through their public API (e.g. MinecraftServery). The stored timestamp
-plus a site-specific cooldown gives us an estimated earliest next vote.
+For each site we store the earliest datetime at which a fresh vote should
+be attempted. Sources of this value:
+  - the site's API (when it exposes `next_vote_at`), or
+  - a cooldown notification parsed during a rejected vote attempt, or
+  - `now + DEFAULT_COOLDOWN` as a post-success estimate for sites whose
+    API doesn't report next-vote times (currently only MinecraftServery).
+
+Used as a fallback when the live API call fails or returns no time.
 
 State is kept in a simple JSON file at the project root. Writes are atomic
 (tmp file + os.replace) so Ctrl+C mid-write can't corrupt the file.
@@ -20,7 +25,7 @@ STATE_FILE = Path("state.json")
 
 
 def load_state() -> dict[str, datetime]:
-    """Load the last-vote timestamps from disk. Returns {} on any failure."""
+    """Load the next-vote timestamps from disk. Returns {} on any failure."""
     if not STATE_FILE.exists():
         return {}
 
@@ -40,8 +45,8 @@ def load_state() -> dict[str, datetime]:
     return result
 
 
-def save_last_vote(site_name: str, when: datetime) -> None:
-    """Atomically update the last-vote timestamp for a single site."""
+def save_next_vote(site_name: str, when: datetime) -> None:
+    """Atomically update the next-vote timestamp for a single site."""
     state = load_state()
     state[site_name] = when
 

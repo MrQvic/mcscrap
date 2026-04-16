@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import datetime
 
 import httpx
@@ -82,9 +83,16 @@ class MinecraftList:
                     "page may be broken or layout changed."
                 )
 
-    def vote(self, context: BrowserContext, nickname: str) -> bool:
+    def vote(self, context: BrowserContext, nickname: str) -> bool | datetime:
         """
         Phase B: cast a vote for `nickname` using the shared browser context.
+
+        Returns:
+          - True     -> vote accepted, caller should use DEFAULT_COOLDOWN
+          - datetime -> vote rejected on cooldown ("Již si hlasoval"); this
+                        is the authoritative next-vote time parsed from the
+                        site's alert message
+          - False    -> vote failed (captcha, missing alert, unknown response)
 
         Flow:
           1. Open vote page with nickname in query string.
@@ -94,9 +102,7 @@ class MinecraftList:
              the `recaptcha-checkbox-checked` class — means Nopecha (or a
              human in debug mode) solved it.
           5. Click the vote/submit button.
-          6. TODO: verify success. No confirmed success signal wired up yet,
-             so this returns True unconditionally after the click. Replace
-             with a real check (flash message, redirect URL, button state).
+          6. Read the resulting alert and dispatch on its text.
         """
         page = context.new_page()
         try:
@@ -127,11 +133,24 @@ class MinecraftList:
                 alert_text = alert.text_content() or ""
 
                 if "Tvůj hlas bude zpracován" in alert_text:
-                    logger.info("vote successful")
+                    # Don't log success here — main.py logs it uniformly
+                    # across all sites based on the boolean return value.
                     return True
                 elif "Již si hlasoval" in alert_text:
-                    logger.info("already voted")
-                    return True
+                    cooldown_until = _parse_cooldown_time(alert_text)
+                    if cooldown_until is not None:
+                        # Don't log here — main.py logs the cooldown outcome
+                        # uniformly across all sites based on the return type.
+                        return cooldown_until
+                    # Parsing failed — log and fall back to "vote rejected" so
+                    # main.py won't persist a fake success timestamp. Next run
+                    # will retry; if the format permanently changed we'll see
+                    # repeated warnings here.
+                    logger.warning(
+                        "cooldown alert present but time unparseable: %r",
+                        alert_text,
+                    )
+                    return False
                 else:
                     logger.warning("unknown alert text: %r", alert_text.strip())
                     return False
@@ -140,3 +159,31 @@ class MinecraftList:
                 return False
         finally:
             page.close()
+
+
+# Matches the datetime portion of "Již si hlasoval. Znovu můžeš hlasovat v
+# DD.MM.YYYY HH:MM:SS". The site emits a fully qualified local timestamp
+# (no timezone), so we anchor on the day.month.year hour:minute:second
+# pattern and parse it directly into a datetime.
+_COOLDOWN_TIME_RE = re.compile(r"(\d{1,2})\.(\d{1,2})\.(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})")
+
+
+def _parse_cooldown_time(text: str) -> datetime | None:
+    """
+    Extract the next-vote time from a "Již si hlasoval" alert.
+
+    Input format observed: "Již si hlasoval. Znovu můžeš hlasovat v 17.04.2026 00:56:38"
+    The site reports a full local datetime (no timezone).
+
+    Returns None if no DD.MM.YYYY HH:MM:SS pattern is found, or if the
+    parsed components don't form a valid datetime (e.g. month=13).
+    """
+    match = _COOLDOWN_TIME_RE.search(text)
+    if not match:
+        return None
+
+    day, month, year, hour, minute, second = (int(g) for g in match.groups())
+    try:
+        return datetime(year, month, day, hour, minute, second)
+    except ValueError:
+        return None
