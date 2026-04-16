@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime
 
 import httpx
@@ -7,6 +8,8 @@ from playwright.sync_api import BrowserContext
 from ..http import http_get
 from ..models import VoteInfo
 from ..config import CAPTCHA_TIMEOUT_MS
+
+logger = logging.getLogger("mc.list")
 
 API_URL = "https://www.minecraft-list.cz/api/server/{server_slug}/player/{nickname}"
 VOTE_URL = "https://www.minecraft-list.cz/server/{server_slug}/vote?name={nickname}"
@@ -98,42 +101,42 @@ class MinecraftList:
         page = context.new_page()
         try:
             url = VOTE_URL.format(server_slug=self.server_slug, nickname=nickname)
-            print(f"[MinecraftList] navigating to {url}")
+            logger.info("navigating to %s", url)
             page.goto(url, wait_until="networkidle")
 
-            print("[MinecraftList] asserting we are on the vote page")
+            logger.debug("asserting we are on the vote page")
             self._assert_on_vote_page(page, url)
 
-            print("[MinecraftList] clicking GDPR checkbox")
+            logger.debug("clicking GDPR checkbox")
             page.click(GDPR_CHECKBOX_SELECTOR)
 
-            print("[MinecraftList] waiting for reCAPTCHA iframe")
+            logger.debug("waiting for reCAPTCHA iframe")
             page.wait_for_selector(RECAPTCHA_IFRAME, timeout=7_000)
 
-            print("[MinecraftList] waiting for reCAPTCHA to be solved")
+            logger.debug("waiting for reCAPTCHA to be solved")
             recaptcha_frame = page.frame_locator(RECAPTCHA_IFRAME)
             recaptcha_frame.locator(RECAPTCHA_CHECKED).wait_for(timeout=CAPTCHA_TIMEOUT_MS)
 
-            print("[MinecraftList] clicking vote button")
+            logger.debug("clicking vote button")
             page.click(VOTE_BUTTON_SELECTOR)
 
-            print("[MinecraftList] waiting for result alert")
+            logger.debug("waiting for result alert")
             try:
                 alert = page.locator(VOTE_ALERT_SELECTOR).first
                 alert.wait_for(timeout=3_000)
                 alert_text = alert.text_content() or ""
 
                 if "Tvůj hlas bude zpracován" in alert_text:
-                    print("[MinecraftList] vote successful.")
+                    logger.info("vote successful")
                     return True
                 elif "Již si hlasoval" in alert_text:
-                    print("[MinecraftList] already voted.")
+                    logger.info("already voted")
                     return True
                 else:
-                    print(f"[MinecraftList] unknown alert text: '{alert_text.strip()}'")
+                    logger.warning("unknown alert text: %r", alert_text.strip())
                     return False
             except Exception:
-                print("[MinecraftList] no alert appeared after vote click.")
+                logger.warning("no alert appeared after vote click")
                 return False
         finally:
             page.close()

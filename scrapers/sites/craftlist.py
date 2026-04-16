@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 
 import json
+import logging
 
 import httpx
 from bs4 import BeautifulSoup
@@ -9,6 +10,8 @@ from playwright.sync_api import BrowserContext
 from ..http import AJAX_HEADERS, http_get
 from ..models import VoteInfo
 from ..config import CAPTCHA_TIMEOUT_MS
+
+logger = logging.getLogger("mc.craftlist")
 
 VOTERS_URL = (
     "https://craftlist.org/{server_slug}/voters"
@@ -126,7 +129,7 @@ class CraftList:
             # Short timeout: on repeat runs the banner is gone and we don't want
             # to block for long. Playwright's click() auto-waits for visible+enabled.
             page.locator(COOKIE_ACCEPT_BUTTON).click(timeout=2_000)
-            print("[CraftList] cookie banner dismissed")
+            logger.debug("cookie banner dismissed")
         except Exception:
             # Banner not present (already accepted in a previous run) — fine.
             pass
@@ -150,26 +153,27 @@ class CraftList:
         page = context.new_page()
         try:
             url = VOTE_URL.format(server_slug=self.server_slug, nickname=nickname)
-            print(f"[CraftList] navigating to {url}")
+            logger.info("navigating to %s", url)
             page.goto(url, wait_until="networkidle")
 
             self._dismiss_cookie_banner(page)
 
-            print("[CraftList] asserting we are on the vote page")
+            logger.debug("asserting we are on the vote page")
             self._assert_on_vote_page(page, url)
 
-            print("[CraftList] waiting for reCAPTCHA iframe")
+            logger.debug("waiting for reCAPTCHA iframe")
             page.wait_for_selector(RECAPTCHA_IFRAME, timeout=7_000)
 
-            print("[CraftList] waiting for reCAPTCHA to be solved")
+            logger.debug("waiting for reCAPTCHA to be solved")
             recaptcha_frame = page.frame_locator(RECAPTCHA_IFRAME)
             recaptcha_frame.locator(RECAPTCHA_CHECKED).wait_for(timeout=CAPTCHA_TIMEOUT_MS)
 
-            print("[CraftList] clicking vote button")
+            logger.debug("clicking vote button")
             page.click(VOTE_BUTTON_SELECTOR)
 
-            print("[CraftList] vote button clicked")
-            # TODO: replace with a real success check.
+            # TODO: replace with a real success check once we observe craftlist's
+            # actual success popup/redirect. Currently returns True unconditionally.
+            logger.info("vote submitted (success unverified)")
             return True
         finally:
             page.close()

@@ -20,3 +20,7 @@ CAPTCHA_TIMEOUT_MS: int = _get_int("CAPTCHA_TIMEOUT_MS", 30_000)
 
 # Timeout for HTTP requests (get_vote_info phase), in seconds.
 HTTP_TIMEOUT_S: int = _get_int("HTTP_TIMEOUT_S", 15)
+
+# Logging level for the entire app. One of: DEBUG, INFO, WARNING, ERROR, CRITICAL.
+# Use DEBUG when investigating per-step scraper flow; INFO is fine for steady state.
+LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()

@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 from datetime import datetime, timedelta
@@ -6,11 +7,14 @@ from dotenv import load_dotenv
 from patchright.sync_api import sync_playwright
 
 from scrapers.browser import BrowserManager
+from scrapers.logger import setup_logging
 from scrapers.models import VoteInfo
 from scrapers.sites import CraftList, CzechCraft, MinecraftList, MinecraftServery
 from scrapers.state import load_state, save_last_vote
 
 load_dotenv()
+setup_logging()
+logger = logging.getLogger("mc.main")
 
 NICK = os.getenv("NICK")
 
@@ -51,7 +55,7 @@ def main() -> dict[str, datetime | None]:
         try:
             infos[name] = site.get_vote_info(NICK)
         except Exception as e:
-            print(f"[{name}] get_vote_info failed: {e}")
+            logger.error("[%s] get_vote_info failed: %s", name, e)
             infos[name] = None
 
     # Compute effective next_vote_at up front so we can log it and reuse it later.
@@ -65,12 +69,11 @@ def main() -> dict[str, datetime | None]:
 
     for name, info in infos.items():
         if info is None:
-            print(f"[{name}] player not found / unavailable")
+            logger.warning("[%s] player not found / unavailable", name)
         else:
-            print(
-                f"[{name}] votes={info.votes} "
-                f"next_vote_at={info.next_vote_at} "
-                f"effective_next_vote_at={effective[name]}"
+            logger.info(
+                "[%s] votes=%s next_vote_at=%s effective_next_vote_at=%s",
+                name, info.votes, info.next_vote_at, effective[name],
             )
 
     # Phase B: shared browser context across all sites.
@@ -83,24 +86,24 @@ def main() -> dict[str, datetime | None]:
                 # Don't attempt to vote if the pre-check failed entirely —
                 # we'd be flying blind and likely just burn a captcha.
                 if infos.get(name) is None:
-                    print(f"[{name}] skipping vote (pre-check failed)")
+                    logger.info("[%s] skipping vote (pre-check failed)", name)
                     continue
 
                 if not _should_vote(effective[name]):
-                    print(f"[{name}] skipping vote (next at {effective[name]})")
+                    logger.info("[%s] skipping vote (next at %s)", name, effective[name])
                     continue
 
                 try:
                     result = site.vote(context, NICK)
                 except NotImplementedError:
-                    print(f"[{name}] vote() not implemented yet")
+                    logger.warning("[%s] vote() not implemented yet", name)
                     continue
                 except Exception as e:
-                    print(f"[{name}] vote failed: {e}")
+                    logger.error("[%s] vote failed: %s", name, e)
                     continue
 
                 if result:
-                    print(f"[{name}] vote successful.")
+                    logger.info("[%s] vote successful", name)
                     now = datetime.now()
                     save_last_vote(name, now)
                     # Refresh our effective time: a successful vote means the
@@ -109,7 +112,7 @@ def main() -> dict[str, datetime | None]:
                     # with the site-reported value if available.
                     effective[name] = now + DEFAULT_COOLDOWN
                 else:
-                    print(f"[{name}] vote failed or unconfirmed.")
+                    logger.warning("[%s] vote failed or unconfirmed", name)
 
     return effective
 
@@ -154,11 +157,10 @@ if __name__ == "__main__":
         effective_times: dict[str, datetime | None] = {}
         try:
             effective_times = main()
-        except Exception as e:
+        except Exception:
             # Catch Exception (not BaseException) so Ctrl+C still aborts the loop.
-            print(f"!!! Run crashed: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
+            # logger.exception attaches the traceback automatically.
+            logger.exception("!!! Run crashed")
 
         # Wake up when the *earliest* site becomes eligible to vote — we run
         # per-site, so each iteration only needs to handle whichever server is

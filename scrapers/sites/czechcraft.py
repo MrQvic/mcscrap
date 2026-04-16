@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime
 
 import httpx
@@ -7,6 +8,8 @@ from playwright.sync_api import BrowserContext
 from ..http import http_get
 from ..config import CAPTCHA_TIMEOUT_MS
 from ..models import VoteInfo
+
+logger = logging.getLogger("mc.czechcraft")
 
 API_URL = "https://czech-craft.eu/api/server/{server_slug}/player/{nickname}/"
 VOTE_URL = "https://czech-craft.eu/server/{server_slug}/vote/?user={nickname}"
@@ -92,21 +95,28 @@ class CzechCraft:
         page = context.new_page()
         try:
             url = VOTE_URL.format(server_slug=self.server_slug, nickname=nickname)
-            print(f"[CzechCraft] navigating to {url}")
+            logger.info("navigating to %s", url)
             page.goto(url, wait_until="networkidle")
 
-            print("[CzechCraft] asserting we are on the vote page")
+            logger.debug("asserting we are on the vote page")
             self._assert_on_vote_page(page, url)
 
+            logger.debug("clicking GDPR checkbox")
             page.click(GDPR_CHECKBOX_SELECTOR)
+
+            logger.debug("waiting for reCAPTCHA iframe")
             page.wait_for_selector(RECAPTCHA_IFRAME, timeout=7_000)
 
+            logger.debug("waiting for reCAPTCHA to be solved")
             recaptcha_frame = page.frame_locator(RECAPTCHA_IFRAME)
             recaptcha_frame.locator(RECAPTCHA_CHECKED).wait_for(timeout=CAPTCHA_TIMEOUT_MS)
 
+            logger.debug("clicking vote button")
             page.click(VOTE_BUTTON_SELECTOR)
 
-            # TODO: replace with a real success check.
+            # TODO: replace with a real success check once we observe czech-craft's
+            # actual success popup/redirect. Currently returns True unconditionally.
+            logger.info("vote submitted (success unverified)")
             return True
         finally:
             page.close()

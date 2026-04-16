@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from html import unescape
 
@@ -7,6 +8,8 @@ from playwright.sync_api import BrowserContext
 from ..http import http_get
 from ..config import CAPTCHA_TIMEOUT_MS
 from ..models import VoteInfo
+
+logger = logging.getLogger("mc.servery")
 
 VOTERS_URL = "https://minecraftservery.eu/voters/{server_slug}"
 VOTE_URL = "https://minecraftservery.eu/server/{server_slug}/vote/{nickname}"
@@ -92,16 +95,16 @@ class MinecraftServery:
         page = context.new_page()
         try:
             url = VOTE_URL.format(server_slug=self.server_slug, nickname=nickname)
-            print(f"[MinecraftServery] navigating to {url}")
+            logger.info("navigating to %s", url)
             page.goto(url, wait_until="networkidle")
 
-            print("[MinecraftServery] asserting we are on the vote page")
+            logger.debug("asserting we are on the vote page")
             self._assert_on_vote_page(page, url)
 
-            print("[MinecraftServery] waiting for Turnstile iframe")
+            logger.debug("waiting for Turnstile iframe")
             page.wait_for_selector(TURNSTILE_IFRAME, timeout=7_000)
 
-            print("[MinecraftServery] waiting for Turnstile to be solved")
+            logger.debug("waiting for Turnstile to be solved")
             page.wait_for_function(
                 """(inputName) => {
                     const el = document.querySelector(`input[name="${inputName}"]`);
@@ -111,29 +114,29 @@ class MinecraftServery:
                 timeout=CAPTCHA_TIMEOUT_MS,
             )
 
-            print("[MinecraftServery] clicking vote button")
+            logger.debug("clicking vote button")
             page.click(VOTE_BUTTON_SELECTOR)
 
-            print("[MinecraftServery] vote button clicked, waiting for popup")
+            logger.debug("waiting for notification popup")
             try:
                 page.wait_for_selector("div.notification", timeout=5_000)
                 notification_text = page.locator("div.notification").first.text_content() or ""
 
                 if "Hlasovat můžete až v" in notification_text:
-                    print("[MinecraftServery] vote on cooldown.")
+                    logger.info("vote on cooldown")
                     return True
                 elif "byl úspěšně odeslán" in notification_text:
-                    print("[MinecraftServery] vote successful.")
+                    logger.info("vote successful")
                     return True
                 elif "Pole captcha je povinné" in notification_text:
-                    print("[MinecraftServery] captcha bypass unsuccessful.")
+                    logger.error("captcha bypass unsuccessful")
                     return False
                 else:
-                    print(f"[MinecraftServery] unknown popup text: '{notification_text.strip()}'")
+                    logger.warning("unknown popup text: %r", notification_text.strip())
                     return False
 
             except Exception:
-                print("[MinecraftServery] no notification popup detected after click.")
+                logger.warning("no notification popup detected after click")
                 return False
         finally:
             page.close()

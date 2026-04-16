@@ -12,8 +12,11 @@ involving the browser or extension at all.
 """
 
 import httpx
+import logging
 
 from .config import HTTP_TIMEOUT_S
+
+logger = logging.getLogger("mc.nopecha")
 
 # NopeCHA status endpoint — referenced in the extension JS as `api.status: "/v1/status"`
 # under base `https://api.nopecha.com`. Returns JSON with plan, credit, and key state.
@@ -64,6 +67,6 @@ def verify_api_key(api_key: str) -> None:
     if isinstance(data, dict):
         plan = data.get("plan") or data.get("subscription")
         credit = data.get("credit") or data.get("credits") or data.get("balance")
-        print(f"[NopeCHA] key verified (plan={plan}, credit={credit})")
+        logger.info("key verified (plan=%s, credit=%s)", plan, credit)
     else:
-        print("[NopeCHA] key verified")
+        logger.info("key verified")
