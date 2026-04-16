@@ -18,6 +18,22 @@ logger = logging.getLogger("mc.main")
 
 NICK = os.getenv("NICK")
 
+# Map scraper class name -> logger name. Keeps mc.main's per-site log lines
+# under the same logger name the scraper itself uses, so all output for one
+# site shares a single name in the formatted log (no "[SiteName]" prefix
+# duplicated in the message).
+SITE_LOGGER_NAMES = {
+    "MinecraftServery": "mc.servery",
+    "MinecraftList": "mc.list",
+    "CraftList": "mc.craftlist",
+    "CzechCraft": "mc.czechcraft",
+}
+
+
+def _site_logger(name: str) -> logging.Logger:
+    """Return the logger associated with a scraper class name."""
+    return logging.getLogger(SITE_LOGGER_NAMES.get(name, f"mc.{name.lower()}"))
+
 # Cooldown used only as a fallback when a site doesn't expose `next_vote_at`.
 # Currently applies to MinecraftServery, which has no API/table to parse.
 DEFAULT_COOLDOWN = timedelta(hours=2)
@@ -25,6 +41,14 @@ DEFAULT_COOLDOWN = timedelta(hours=2)
 # Safety margin added to the earliest next-vote time before we wake up,
 # so we don't race the server by a couple of seconds.
 WAKEUP_SAFETY_MARGIN = timedelta(seconds=15)
+
+# How far into the future we're willing to wait *inside the current run*
+# for a site to become eligible. If multiple sites are clustered within
+# this window (which is typical — voting cooldowns line up across sites),
+# we wait inside the loop instead of finishing the run and spinning up a
+# fresh one moments later. Avoids: redundant browser launches, repeated
+# get_vote_info() calls, and a too-precise on-the-second voting cadence.
+VOTE_GRACE_WINDOW = timedelta(seconds=60)
 
 
 def main() -> dict[str, datetime | None]:
@@ -55,7 +79,7 @@ def main() -> dict[str, datetime | None]:
         try:
             infos[name] = site.get_vote_info(NICK)
         except Exception as e:
-            logger.error("[%s] get_vote_info failed: %s", name, e)
+            _site_logger(name).error("get_vote_info failed: %s", e)
             infos[name] = None
 
     # Compute effective next_vote_at up front so we can log it and reuse it later.
@@ -68,12 +92,13 @@ def main() -> dict[str, datetime | None]:
     }
 
     for name, info in infos.items():
+        site_log = _site_logger(name)
         if info is None:
-            logger.warning("[%s] player not found / unavailable", name)
+            site_log.warning("player not found / unavailable")
         else:
-            logger.info(
-                "[%s] votes=%s next_vote_at=%s effective_next_vote_at=%s",
-                name, info.votes, info.next_vote_at, effective[name],
+            site_log.info(
+                "votes=%s next_vote_at=%s effective_next_vote_at=%s",
+                info.votes, info.next_vote_at, effective[name],
             )
 
     # Phase B: shared browser context across all sites.
@@ -82,29 +107,40 @@ def main() -> dict[str, datetime | None]:
         with BrowserManager(p) as context:
             for site in sites:
                 name = type(site).__name__
+                site_log = _site_logger(name)
 
                 # Don't attempt to vote if the pre-check failed entirely —
                 # we'd be flying blind and likely just burn a captcha.
                 if infos.get(name) is None:
-                    logger.info("[%s] skipping vote (pre-check failed)", name)
+                    site_log.info("skipping vote (pre-check failed)")
                     continue
 
-                if not _should_vote(effective[name]):
-                    logger.info("[%s] skipping vote (next at %s)", name, effective[name])
+                wait_seconds = _wait_seconds_until_vote(effective[name])
+                if wait_seconds is None:
+                    site_log.info("skipping vote (next at %s)", effective[name])
                     continue
+                if wait_seconds > 0:
+                    site_log.info(
+                        "waiting %.0fs for vote slot (opens at %s)",
+                        wait_seconds, effective[name],
+                    )
+                    time.sleep(wait_seconds)
 
                 try:
                     result = site.vote(context, NICK)
                 except NotImplementedError:
-                    logger.warning("[%s] vote() not implemented yet", name)
+                    site_log.warning("vote() not implemented yet")
                     continue
                 except Exception as e:
-                    logger.error("[%s] vote failed: %s", name, e)
+                    site_log.error("vote failed: %s", e)
                     continue
 
                 if result:
-                    logger.info("[%s] vote successful", name)
-                    now = datetime.now()
+                    site_log.info("vote successful")
+                    # Truncate to whole seconds — used only for cooldown estimation,
+                    # and keeps log output consistent with site-reported timestamps
+                    # (which never have sub-second precision).
+                    now = datetime.now().replace(microsecond=0)
                     save_last_vote(name, now)
                     # Refresh our effective time: a successful vote means the
                     # next one is at least DEFAULT_COOLDOWN away. The next
@@ -112,7 +148,7 @@ def main() -> dict[str, datetime | None]:
                     # with the site-reported value if available.
                     effective[name] = now + DEFAULT_COOLDOWN
                 else:
-                    logger.warning("[%s] vote failed or unconfirmed", name)
+                    site_log.warning("vote failed or unconfirmed")
 
     return effective
 
@@ -135,15 +171,23 @@ def _effective_next_vote_at(
     return None
 
 
-def _should_vote(next_vote_at: datetime | None) -> bool:
+def _wait_seconds_until_vote(next_vote_at: datetime | None) -> float | None:
     """
-    Decide whether we should attempt to vote on a site right now.
+    Decide whether (and how long) to wait for a site's next vote slot in this run.
 
-    Votes only if next_vote_at is in the past or unknown (None).
+    Returns:
+      - 0.0  -> vote now (slot is open, or unknown)
+      - >0   -> vote after waiting this many seconds (slot opens within grace window)
+      - None -> skip; the slot is too far away, leave it for a future run
     """
     if next_vote_at is None:
-        return True
-    return datetime.now() >= next_vote_at
+        return 0.0
+    delta = (next_vote_at - datetime.now()).total_seconds()
+    if delta <= 0:
+        return 0.0
+    if delta <= VOTE_GRACE_WINDOW.total_seconds():
+        return delta
+    return None
 
 
 if __name__ == "__main__":

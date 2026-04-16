@@ -16,10 +16,12 @@ import sys
 
 from .config import LOG_LEVEL
 
-# Format: HH:MM:SS [LEVEL] logger.name: message
+# Format: HH:MM:SS [LEVEL  ] logger.name  : message
+# - levelname is left-padded to 7 chars (longest standard level is "WARNING")
+# - name is left-padded to 13 chars (longest current logger name is "mc.czechcraft")
 # We omit the date — runs are short enough that time-of-day is sufficient,
 # and the main.py "=== Run started at ... ===" banner already provides date context.
-_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+_LOG_FORMAT = "%(asctime)s [%(levelname)-7s] %(name)-13s: %(message)s"
 _DATE_FORMAT = "%H:%M:%S"
 
 # Noisy third-party loggers — pinned to WARNING so they stay quiet even when
