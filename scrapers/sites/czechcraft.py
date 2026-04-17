@@ -18,7 +18,20 @@ VOTE_URL = "https://czech-craft.eu/server/{server_slug}/vote/?user={nickname}"
 GDPR_CHECKBOX_SELECTOR = "#privacy"
 RECAPTCHA_IFRAME = 'iframe[title="reCAPTCHA"]'
 RECAPTCHA_CHECKED = "#recaptcha-anchor.recaptcha-checkbox-checked"
-VOTE_BUTTON_SELECTOR = "body > div.container > div.container-left > div > form > button"
+VOTE_BUTTON_SELECTOR = "form button.button"
+
+# Result alert shown after submitting the vote. Catches both variants; we
+# dispatch on the modifier class (.alert-success vs .alert-error). Note that
+# the pre-vote cooldown notice uses the same .alert.alert-error classes — it
+# is checked separately BEFORE submit (see COOLDOWN_NOTICE_SELECTOR below).
+VOTE_ALERT_SELECTOR = "div.alert"
+
+# Pre-vote cooldown notice rendered on the vote page when the player still
+# can't vote (cooldown not elapsed). Same CSS classes as the post-submit error
+# alert, so we disambiguate by text — "Hlasovat pro server můžeš" appears only
+# in this pre-vote variant. When present, the form is replaced and there's
+# nothing to submit, so we short-circuit before captcha.
+COOLDOWN_NOTICE_SELECTOR = 'div.alert.alert-error:has-text("Hlasovat pro server můžeš")'
 
 # Max time we wait for the captcha to be solved — configured via CAPTCHA_TIMEOUT_MS in .env.
 
@@ -29,10 +42,7 @@ NEXT_VOTE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 class CzechCraft:
     """
-    Site adapter for czech-craft.eu.
-
-    Phase A: per-player JSON API, 404 = player not found.
-    Phase B: TODO — open vote page, solve captcha, submit, verify success.
+    Site adapter for czech-craft.eu
     """
 
     def __init__(self, server_slug: str):
@@ -83,20 +93,29 @@ class CzechCraft:
 
         Flow:
           1. Open vote page with nickname in query string.
-          2. Defensive check: assert we're on the correct page with expected elements present.
-          3. Tick the GDPR / consent checkbox.
-          4. Wait for the reCAPTCHA iframe, then poll until Nopecha (or a human
+          2. Short-circuit: if the page shows a pre-vote cooldown notice
+             instead of the form, return False without attempting captcha.
+          3. Defensive check: assert we're on the correct page with expected elements present.
+          4. Tick the GDPR / consent checkbox.
+          5. Wait for the reCAPTCHA iframe, then poll until Nopecha (or a human
              in debug mode) marks it as solved.
-          5. Click the vote/submit button.
-          6. TODO: verify success. No confirmed success signal wired up yet,
-             so this returns True unconditionally after the click. Replace
-             with a real check (flash message, redirect URL, button state).
+          6. Click the vote/submit button.
+          7. Wait for the result alert and dispatch on its CSS class:
+             alert-success -> True, alert-error -> False (cooldown), other -> False.
         """
         page = context.new_page()
         try:
             url = VOTE_URL.format(server_slug=self.server_slug, nickname=nickname)
             logger.info("navigating to %s", url)
             page.goto(url, wait_until="networkidle")
+
+            # Pre-vote cooldown short-circuit: when the player can't vote yet,
+            # the form is replaced by a static notice. Without this check,
+            # _assert_on_vote_page would raise "layout changed" — misleading,
+            # since the page is fine, just not in a votable state.
+            if page.locator(COOLDOWN_NOTICE_SELECTOR).count() > 0:
+                logger.info("vote on cooldown (pre-vote notice present)")
+                return False
 
             logger.debug("asserting we are on the vote page")
             self._assert_on_vote_page(page, url)
@@ -114,9 +133,27 @@ class CzechCraft:
             logger.debug("clicking vote button")
             page.click(VOTE_BUTTON_SELECTOR)
 
-            # TODO: replace with a real success check once we observe czech-craft's
-            # actual success popup/redirect. Currently returns True unconditionally.
-            logger.info("vote submitted (success unverified)")
-            return True
+            logger.debug("waiting for result alert")
+            try:
+                alert = page.locator(VOTE_ALERT_SELECTOR).first
+                alert.wait_for(timeout=3_000)
+                alert_classes = alert.get_attribute("class") or ""
+                alert_text = (alert.text_content() or "").strip()
+
+                if "alert-success" in alert_classes:
+                    # Don't log success here — main.py logs it uniformly
+                    # across all sites based on the boolean return value.
+                    return True
+                elif "alert-error" in alert_classes:
+                    # Post-submit cooldown alert (e.g. "Již si hlasoval.").
+                    # Not parsed — next run's get_vote_info() decides eligibility.
+                    logger.info("vote rejected: %s", alert_text)
+                    return False
+                else:
+                    logger.warning("unknown alert classes=%r text=%r", alert_classes, alert_text)
+                    return False
+            except Exception:
+                logger.warning("no alert appeared after vote click")
+                return False
         finally:
             page.close()
