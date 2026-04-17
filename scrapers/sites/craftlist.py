@@ -23,6 +23,18 @@ RECAPTCHA_IFRAME = 'iframe[title="reCAPTCHA"]'
 RECAPTCHA_CHECKED = '#recaptcha-anchor.recaptcha-checkbox-checked'
 VOTE_BUTTON_SELECTOR = 'button[data-lfv-message-id="frm-voteForm-_submit_message"]'
 
+# Result alert shown after submitting the vote. The variant class
+# (alert-success / alert-error) is the authoritative success signal — we
+# dispatch on it rather than on the alert text, since the class is structural
+# and the text contains volatile content (timestamps, server names).
+VOTE_ALERT_SELECTOR = 'div.alert.alert-custom'
+
+# When the player's IP is on cooldown, craftlist replaces the vote button in
+# the modal with a static "Další možný hlas za..." label. Detected via the
+# stable modal ID + text content rather than the brittle positional Bootstrap
+# class chain (col-12 col-md-8 text-center appears dozens of times per page).
+IP_COOLDOWN_SELECTOR = '#voteModal:has-text("Další možný hlas za")'
+
 # Cookie consent banner — appears on first visit, then persisted in the Chrome
 # profile. We target the stable attributes (class + data-role), not the brittle
 # nth-child path that DevTools "Copy selector" produces.
@@ -140,15 +152,16 @@ class CraftList:
 
         Flow:
           1. Open vote page.
-          2. Defensive check: assert we're on the correct page with the vote button present.
-          3. TODO: fill in nickname input if required.
-          4. Tick the GDPR / consent checkbox.
-          5. Wait for the reCAPTCHA iframe, then poll until Nopecha (or a human
+          2. Short-circuit: if the modal shows an IP cooldown label instead of
+             the vote button, return False without attempting captcha.
+          3. Defensive check: assert we're on the correct page with the vote button present.
+          4. TODO: fill in nickname input if required.
+          5. Tick the GDPR / consent checkbox.
+          6. Wait for the reCAPTCHA iframe, then poll until Nopecha (or a human
              in debug mode) marks it as solved.
-          6. Click the vote/submit button.
-          7. TODO: verify success. No confirmed success signal wired up yet,
-             so this returns True unconditionally after the click. Replace
-             with a real check (flash message, redirect URL, button state).
+          7. Click the vote/submit button.
+          8. Wait for the result alert and dispatch on its CSS class:
+             alert-success -> True, alert-error -> False (cooldown), other -> False.
         """
         page = context.new_page()
         try:
@@ -157,6 +170,14 @@ class CraftList:
             page.goto(url, wait_until="networkidle")
 
             self._dismiss_cookie_banner(page)
+
+            # IP cooldown short-circuit: when the IP has already voted within
+            # the cooldown window, the modal renders a static label instead of
+            # the vote button. Without this check, _assert_on_vote_page would
+            # raise "layout changed" — misleading, since the page is fine.
+            if page.locator(IP_COOLDOWN_SELECTOR).count() > 0:
+                logger.info("vote on IP cooldown (modal shows cooldown state)")
+                return False
 
             logger.debug("asserting we are on the vote page")
             self._assert_on_vote_page(page, url)
@@ -171,10 +192,29 @@ class CraftList:
             logger.debug("clicking vote button")
             page.click(VOTE_BUTTON_SELECTOR)
 
-            # TODO: replace with a real success check once we observe craftlist's
-            # actual success popup/redirect. Currently returns True unconditionally.
-            logger.info("vote submitted (success unverified)")
-            return True
+            logger.debug("waiting for result alert")
+            try:
+                alert = page.locator(VOTE_ALERT_SELECTOR).first
+                alert.wait_for(timeout=3_000)
+                alert_classes = alert.get_attribute("class") or ""
+                alert_text = (alert.text_content() or "").strip()
+
+                if "alert-success" in alert_classes:
+                    # Don't log success here — main.py logs it uniformly
+                    # across all sites based on the boolean return value.
+                    return True
+                elif "alert-error" in alert_classes:
+                    # Cooldown alert observed format:
+                    # "Další možný hlas za tento server můžeš odeslat DD.MM.YYYY HH:MM"
+                    # Not parsed — next run's get_vote_info() decides eligibility.
+                    logger.info("vote on cooldown: %s", alert_text)
+                    return False
+                else:
+                    logger.warning("unknown alert classes=%r text=%r", alert_classes, alert_text)
+                    return False
+            except Exception:
+                logger.warning("no alert appeared after vote click")
+                return False
         finally:
             page.close()
 
