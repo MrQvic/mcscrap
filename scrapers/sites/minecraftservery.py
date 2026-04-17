@@ -1,7 +1,6 @@
 import json
 import logging
 import re
-from datetime import datetime, timedelta
 from html import unescape
 
 from playwright.sync_api import BrowserContext
@@ -76,15 +75,14 @@ class MinecraftServery:
                 "page may be broken or layout changed."
             )
 
-    def vote(self, context: BrowserContext, nickname: str) -> bool | datetime:
+    def vote(self, context: BrowserContext, nickname: str) -> bool:
         """
         Phase B: cast a vote for `nickname` using the shared browser context.
 
         Returns:
-          - True     -> vote accepted, caller should use DEFAULT_COOLDOWN
-          - datetime -> vote rejected on cooldown; this is the authoritative
-                        next-vote time parsed from the site's notification
-          - False    -> vote failed (captcha, missing popup, unknown response)
+          - True  -> vote accepted (success popup detected)
+          - False -> vote rejected on cooldown, captcha failed, missing popup,
+                     or any other unexpected response
 
         Flow:
           1. Open the vote page with nickname in the query string.
@@ -129,19 +127,11 @@ class MinecraftServery:
                 logger.debug("notification raw text: %r", notification_text)
 
                 if "Hlasovat můžete až v" in notification_text:
-                    cooldown_until = _parse_cooldown_time(notification_text)
-                    if cooldown_until is not None:
-                        # Don't log here — main.py logs the cooldown outcome
-                        # uniformly across all sites based on the return type.
-                        return cooldown_until
-                    # Parsing failed — log and fall back to "vote rejected" so
-                    # main.py won't persist a fake success timestamp. Next run
-                    # will retry; if the format permanently changed we'll see
-                    # repeated warnings here.
-                    logger.warning(
-                        "cooldown notification present but time unparseable: %r",
-                        notification_text,
-                    )
+                    # Cooldown notification observed format: " Hlasovat můžete až v HH:MM"
+                    # (HH:MM only, no date, no timezone — server local time).
+                    # We no longer parse this; the next run's get_vote_info()
+                    # will decide eligibility before attempting another vote.
+                    logger.info("vote on cooldown: %s", notification_text.strip())
                     return False
                 elif "byl úspěšně odeslán" in notification_text:
                     # Don't log success here — main.py logs it uniformly
@@ -159,44 +149,3 @@ class MinecraftServery:
                 return False
         finally:
             page.close()
-
-
-# Matches the time portion of "Hlasovat můžete až v HH:MM". The site only
-# emits HH:MM (no seconds, no date), so we anchor on two colon-separated
-# digit groups and reconstruct the full datetime in _parse_cooldown_time.
-_COOLDOWN_TIME_RE = re.compile(r"(\d{1,2}):(\d{2})")
-
-
-def _parse_cooldown_time(text: str, now: datetime | None = None) -> datetime | None:
-    """
-    Extract the next-vote time from a cooldown notification.
-
-    Input format observed: " Hlasovat můžete až v 22:50"
-    The site reports only HH:MM in local time (no date, no timezone).
-
-    We combine the parsed time with today's date. If the resulting datetime
-    is in the past relative to `now`, we assume the cooldown crosses midnight
-    and roll forward by one day. The 1-minute grace window protects against
-    clock drift between us and the server (we don't want to roll forward when
-    the server says "22:50" and we read it at 22:50:03).
-
-    Returns None if no HH:MM pattern is found.
-    """
-    match = _COOLDOWN_TIME_RE.search(text)
-    if not match:
-        return None
-
-    hour, minute = int(match.group(1)), int(match.group(2))
-    if not (0 <= hour < 24 and 0 <= minute < 60):
-        return None
-
-    now = now or datetime.now()
-    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-
-    # Roll forward across midnight only when the time is meaningfully in the
-    # past — a few seconds of drift between server and us shouldn't push the
-    # next vote a full day away.
-    if candidate < now - timedelta(minutes=1):
-        candidate += timedelta(days=1)
-
-    return candidate
