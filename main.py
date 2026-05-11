@@ -41,6 +41,15 @@ RETRY_DELAY_S = 3.0
 # so this is the natural cadence — nothing to gain from being clever.
 SLEEP_BETWEEN_RUNS_S = 2 * 60 * 60
 
+# Defined at module level so both main() and the startup check share the same
+# list without having to instantiate scrapers twice.
+SITES = [
+    MinecraftServery(server_slug="goldskyblock-1171"),
+    CzechCraft(server_slug="goldskyblock"),
+    MinecraftList(server_slug="goldskyblock-y5hf"),
+    CraftList(server_slug="goldskyblock"),
+]
+
 
 def _site_logger(name: str) -> logging.Logger:
     """Return the logger associated with a scraper class name."""
@@ -93,16 +102,9 @@ def _vote_with_retry(site, context, nickname: str, site_log: logging.Logger) -> 
 
 
 def main() -> None:
-    sites = [
-        MinecraftServery(server_slug="goldskyblock-1171"),
-        CzechCraft(server_slug="goldskyblock"),
-        MinecraftList(server_slug="goldskyblock-y5hf"),
-        CraftList(server_slug="goldskyblock"),
-    ]
-
     # Phase A: cheap lookup per site, no browser involved.
     infos: dict[str, VoteInfo | None] = {}
-    for site in sites:
+    for site in SITES:
         name = type(site).__name__
         try:
             infos[name] = site.get_vote_info(NICK)
@@ -121,7 +123,7 @@ def main() -> None:
     # Sequential calls respect the NopeCHA basic 2-concurrent-connection limit.
     with sync_playwright() as p:
         with BrowserManager(p) as context:
-            for site in sites:
+            for site in SITES:
                 name = type(site).__name__
                 site_log = _site_logger(name)
 
@@ -135,8 +137,52 @@ def main() -> None:
                     site_log.warning("vote failed or unconfirmed")
 
 
+def _startup_sleep_if_needed() -> None:
+    """
+    One-shot check on startup: if no site is ready to vote right now, sleep
+    until the latest known next_vote_at instead of wasting a full 2-hour
+    cycle. Runs once before the main loop and never again.
+    """
+    logger.info("=== Startup check ===")
+    infos: dict[str, VoteInfo | None] = {}
+    for site in SITES:
+        name = type(site).__name__
+        try:
+            infos[name] = site.get_vote_info(NICK)
+        except Exception as e:
+            _site_logger(name).error("get_vote_info failed: %s", e)
+            infos[name] = None
+
+    if any(_should_vote(info) for info in infos.values()):
+        # At least one site is ready — jump straight into the loop.
+        logger.info("=== Startup check: at least one site ready, starting immediately ===")
+        return
+
+    known_times = [
+        info.next_vote_at
+        for info in infos.values()
+        if info is not None and info.next_vote_at is not None
+    ]
+    if known_times:
+        wake_at = max(known_times)
+        sleep_s = max(0.0, (wake_at - datetime.now()).total_seconds())
+        logger.info(
+            "=== Startup check: no site ready, sleeping until %s (%.1f min) ===",
+            wake_at.strftime("%Y-%m-%d %H:%M:%S"),
+            sleep_s / 60,
+        )
+        time.sleep(sleep_s)
+    else:
+        logger.info(
+            "=== Startup check: all sites unavailable, sleeping %.0f min ===",
+            SLEEP_BETWEEN_RUNS_S / 60,
+        )
+        time.sleep(SLEEP_BETWEEN_RUNS_S)
+
+
 if __name__ == "__main__":
     logger.info("=== Starting main loop ===")
+    _startup_sleep_if_needed()
     try:
         while True:
             run_started_at = datetime.now()
