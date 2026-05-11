@@ -153,8 +153,16 @@ def _startup_sleep_if_needed() -> None:
             _site_logger(name).error("get_vote_info failed: %s", e)
             infos[name] = None
 
-    if any(_should_vote(info) for info in infos.values()):
-        # At least one site is ready — jump straight into the loop.
+    # Stricter than _should_vote: next_vote_at=None means "unknown", not "ready".
+    # MinecraftServery can never determine next_vote_at, so we don't let it
+    # short-circuit the startup sleep for the other three sites.
+    def _is_ready_for_startup(info: VoteInfo | None) -> bool:
+        if info is None or info.next_vote_at is None:
+            return False
+        return datetime.now() >= info.next_vote_at
+
+    if any(_is_ready_for_startup(info) for info in infos.values()):
+        # At least one site with a known cooldown is ready — start immediately.
         logger.info("=== Startup check: at least one site ready, starting immediately ===")
         return
 
