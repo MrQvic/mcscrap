@@ -50,6 +50,15 @@ SITES = [
     CraftList(server_slug="goldskyblock"),
 ]
 
+def _sleep_until(target: datetime) -> None:
+    """Sleep until a specific point in time, robust against early wakeups."""
+    while True:
+        remaining = (target - datetime.now()).total_seconds()
+        if remaining <= 0:
+            break
+        # Cap at 120s so we re-check the deadline regularly
+        time.sleep(min(remaining, 120.0))
+
 
 def _site_logger(name: str) -> logging.Logger:
     """Return the logger associated with a scraper class name."""
@@ -205,12 +214,12 @@ if __name__ == "__main__":
                 # propagates up to the outer try and exits cleanly.
                 logger.exception("!!! Run crashed")
 
-            next_run_at = datetime.now() + timedelta(seconds=SLEEP_BETWEEN_RUNS_S)
-            logger.info(
-                "=== Run finished. Sleeping until %s (%.1f min) ===",
-                next_run_at.strftime("%Y-%m-%d %H:%M:%S"),
-                SLEEP_BETWEEN_RUNS_S / 60,
-            )
-            time.sleep(SLEEP_BETWEEN_RUNS_S)
+        next_run_at = datetime.now() + timedelta(seconds=SLEEP_BETWEEN_RUNS_S)
+        logger.info(
+            "=== Run finished. Sleeping until %s (%.1f min) ===",
+            next_run_at.strftime("%Y-%m-%d %H:%M:%S"),
+            SLEEP_BETWEEN_RUNS_S / 60,
+        )
+        _sleep_until(next_run_at)
     except KeyboardInterrupt:
         logger.info("=== Interrupted by user, exiting ===")
