@@ -38,7 +38,7 @@ MAX_VOTE_ATTEMPTS = 2
 RETRY_DELAY_S = 3.0
 
 # Fixed sleep between full runs. All four sites use 2-hour vote cooldowns
-SLEEP_BETWEEN_RUNS_S = 2 * 60 * 60 + 360
+SLEEP_BETWEEN_RUNS_S = 2 * 60 * 60 + 60
 
 # Defined at module level so both main() and the startup check share the same
 # list without having to instantiate scrapers twice.
