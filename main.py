@@ -37,9 +37,8 @@ MAX_VOTE_ATTEMPTS = 2
 # long enough to avoid hammering the site / captcha solver back-to-back.
 RETRY_DELAY_S = 3.0
 
-# Fixed sleep between full runs. All four sites use ~2-hour vote cooldowns,
-# so this is the natural cadence — nothing to gain from being clever.
-SLEEP_BETWEEN_RUNS_S = 2 * 60 * 60
+# Fixed sleep between full runs. All four sites use 2-hour vote cooldowns
+SLEEP_BETWEEN_RUNS_S = 2 * 60 * 60 + 360
 
 # Defined at module level so both main() and the startup check share the same
 # list without having to instantiate scrapers twice.
@@ -49,15 +48,6 @@ SITES = [
     MinecraftList(server_slug="goldskyblock-y5hf"),
     CraftList(server_slug="goldskyblock"),
 ]
-
-def _sleep_until(target: datetime) -> None:
-    """Sleep until a specific point in time, robust against early wakeups."""
-    while True:
-        remaining = (target - datetime.now()).total_seconds()
-        if remaining <= 0:
-            break
-        # Cap at 120s so we re-check the deadline regularly
-        time.sleep(min(remaining, 120.0))
 
 
 def _site_logger(name: str) -> logging.Logger:
@@ -214,12 +204,12 @@ if __name__ == "__main__":
                 # propagates up to the outer try and exits cleanly.
                 logger.exception("!!! Run crashed")
 
-        next_run_at = datetime.now() + timedelta(seconds=SLEEP_BETWEEN_RUNS_S)
-        logger.info(
-            "=== Run finished. Sleeping until %s (%.1f min) ===",
-            next_run_at.strftime("%Y-%m-%d %H:%M:%S"),
-            SLEEP_BETWEEN_RUNS_S / 60,
-        )
-        _sleep_until(next_run_at)
+            next_run_at = datetime.now() + timedelta(seconds=SLEEP_BETWEEN_RUNS_S)
+            logger.info(
+                "=== Run finished. Sleeping until %s (%.1f min) ===",
+                next_run_at.strftime("%Y-%m-%d %H:%M:%S"),
+                SLEEP_BETWEEN_RUNS_S / 60,
+            )
+            time.sleep(SLEEP_BETWEEN_RUNS_S)
     except KeyboardInterrupt:
         logger.info("=== Interrupted by user, exiting ===")
