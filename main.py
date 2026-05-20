@@ -100,6 +100,42 @@ def _vote_with_retry(site, context, nickname: str, site_log: logging.Logger) -> 
     return False
 
 
+def _sleep_until(target: datetime, chunk_s: float = 60.0) -> None:
+    """
+    Sleep until wall-clock datetime.now() reaches target.
+
+    Uses a chunked loop because time.sleep() on Linux uses CLOCK_MONOTONIC,
+    while datetime.now() reads wall clock. On WSL2 the two can drift apart
+    when the host suspends or resyncs the VM clock, so a single big sleep
+    can end at the wrong wall-clock time. Re-checking remaining wall-clock
+    time after each chunk makes the sleep track real time.
+
+    Logs WARNING when wall-clock elapsed during a chunk differs from the
+    requested sleep duration by more than DRIFT_THRESHOLD_S — evidence of
+    a clock jump or resync.
+    """
+    # Small jitter is normal; multi-second deviation means the wall clock
+    # actually jumped (forward or backward) during the sleep.
+    DRIFT_THRESHOLD_S = 5.0
+
+    while True:
+        remaining = (target - datetime.now()).total_seconds()
+        if remaining <= 0:
+            return
+
+        sleep_s = min(remaining, chunk_s)
+        before = datetime.now()
+        time.sleep(sleep_s)
+        elapsed = (datetime.now() - before).total_seconds()
+
+        drift = elapsed - sleep_s
+        if abs(drift) >= DRIFT_THRESHOLD_S:
+            logger.warning(
+                "wall clock drift: slept %.1fs, wall clock advanced %.1fs (drift %+.1fs)",
+                sleep_s, elapsed, drift,
+            )
+
+
 def main() -> None:
     # Phase A: cheap lookup per site, no browser involved.
     infos: dict[str, VoteInfo | None] = {}
@@ -178,7 +214,7 @@ def _startup_sleep_if_needed() -> None:
             wake_at.strftime("%Y-%m-%d %H:%M:%S"),
             sleep_s / 60,
         )
-        time.sleep(sleep_s)
+        _sleep_until(wake_at)
     else:
         logger.info(
             "=== Startup check: all sites unavailable, sleeping %.0f min ===",
@@ -210,6 +246,6 @@ if __name__ == "__main__":
                 next_run_at.strftime("%Y-%m-%d %H:%M:%S"),
                 SLEEP_BETWEEN_RUNS_S / 60,
             )
-            time.sleep(SLEEP_BETWEEN_RUNS_S)
+            _sleep_until(next_run_at)
     except KeyboardInterrupt:
         logger.info("=== Interrupted by user, exiting ===")
