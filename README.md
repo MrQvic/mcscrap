@@ -93,14 +93,17 @@ Also update the server slugs in the `sites` list in `main.py` if you're voting f
 
 ## Updating
 
-After pulling the latest project changes, update the Python dependencies and Patchright browser:
+On an existing device, pull the latest project changes, synchronize the environment with the committed `uv.lock`, and install the Chromium version required by Patchright:
 
 ```bash
-uv sync --upgrade
-uv run patchright install
+git pull
+uv sync
+uv run patchright install chromium
 ```
 
-NopeCHA is bundled separately and is not updated by the commands above. Download the [latest NopeCHA Chromium extension](https://github.com/NopeCHALLC/nopecha-extension/releases/latest/download/chromium.zip) and replace the contents of `extensions/nopecha/` with the extracted files. Make sure `manifest.json` is directly inside `extensions/nopecha/`.
+The NopeCHA extension is tracked in this repository, so `git pull` updates it together with the project. No separate download is needed unless you are deliberately upgrading NopeCHA to a newer upstream release.
+
+To deliberately upgrade the project's Python dependencies, run `uv sync --upgrade`, review the resulting `uv.lock` changes, test them, and commit the updated lockfile.
 
 ## Running
 
