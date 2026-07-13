@@ -51,7 +51,9 @@ class BrowserManager:
             if not NOPECHA_EXTENSION_PATH.exists():
                 raise FileNotFoundError(
                     f"Nopecha extension not found at: {NOPECHA_EXTENSION_PATH}\n"
-                    "Download from https://github.com/nopecha/nopecha-chrome and unpack there."
+                    "Download the Chromium build from "
+                    "https://github.com/NopeCHALLC/nopecha-extension/releases/latest "
+                    "and unpack it there."
                 )
 
             # Sanity check the key against the NopeCHA backend BEFORE spinning up
@@ -64,8 +66,9 @@ class BrowserManager:
             self._display = Xvfb(width=1280, height=720, colordepth=24)
             self._display.start()
             # xvfbwrapper already sets os.environ["DISPLAY"], but we re-assert it
-            # explicitly and also pass it via the env= parameter on launch below,
-            # because Playwright's Node driver does not reliably inherit it on Wayland/KDE.
+            # explicitly and also pass it via the env= parameter on launch below.
+            # This keeps Chromium on Xvfb when WSLg/Wayland exposes another display,
+            # and covers cases where Playwright's Node driver does not inherit DISPLAY.
             os.environ["DISPLAY"] = f":{self._display.new_display}"
 
         CHROME_PROFILE_DIR.mkdir(exist_ok=True)
@@ -80,9 +83,8 @@ class BrowserManager:
                 f"--load-extension={NOPECHA_EXTENSION_PATH}",
             ]
 
-        # Explicit env for the Chromium subprocess. Playwright's Node driver does not
-        # reliably propagate DISPLAY from os.environ in our setup (Wayland session with
-        # XWayland on :0), so we pass it explicitly to guarantee Chromium connects to Xvfb.
+        # Explicit env for the Chromium subprocess guarantees that it connects to the
+        # selected Xvfb display instead of a WSLg/Wayland display inherited elsewhere.
         child_env = {**os.environ}
 
         self.context = self.playwright.chromium.launch_persistent_context(

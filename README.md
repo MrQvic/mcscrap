@@ -42,6 +42,23 @@ After installation, restart your terminal so `uv` is available on `PATH`.
 sudo apt install xvfb
 ```
 
+### Optional: disable WSLg if Xvfb is unstable
+
+If Chromium consistently connects to WSLg instead of Xvfb or behaves unstably on WSL2, you can disable WSL GUI applications globally. Create or edit `%USERPROFILE%\.wslconfig` on Windows:
+
+```ini
+[wsl2]
+guiApplications=false
+```
+
+Then restart WSL from Windows PowerShell:
+
+```powershell
+wsl --shutdown
+```
+
+This is an optional troubleshooting step, not a general requirement. It also prevents `DEBUG=true` from displaying the browser through WSLg; remove the setting or change it to `true` when you need GUI debug mode.
+
 ## Setup
 
 ### 1. Clone the repo
