@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import BrowserContext
 
 from ..http import AJAX_HEADERS, http_get
-from ..models import VoteInfo
+from ..models import SiteRunResult, VoteInfo
 from ..config import CAPTCHA_TIMEOUT_MS
 
 logger = logging.getLogger("mc.craftlist")
@@ -146,22 +146,24 @@ class CraftList:
             # Banner not present (already accepted in a previous run) — fine.
             pass
 
-    def vote(self, context: BrowserContext, nickname: str) -> bool:
+    def vote(self, context: BrowserContext, nickname: str) -> SiteRunResult:
         """
         Phase B: cast a vote for `nickname` using the shared browser context.
+
+        Returns a structured result with the outcome and a human-readable detail.
 
         Flow:
           1. Open vote page.
           2. Short-circuit: if the modal shows an IP cooldown label instead of
-             the vote button, return False without attempting captcha.
+             the vote button, return a skipped result without attempting captcha.
           3. Defensive check: assert we're on the correct page with the vote button present.
           4. TODO: fill in nickname input if required.
           5. Tick the GDPR / consent checkbox.
           6. Wait for the reCAPTCHA iframe, then poll until Nopecha (or a human
              in debug mode) marks it as solved.
           7. Click the vote/submit button.
-          8. Wait for the result alert and dispatch on its CSS class:
-             alert-success -> True, alert-error -> False (cooldown), other -> False.
+          8. Wait for the result alert and classify it as success, cooldown,
+             or failure.
         """
         page = context.new_page()
         try:
@@ -177,7 +179,10 @@ class CraftList:
             # raise "layout changed" — misleading, since the page is fine.
             if page.locator(IP_COOLDOWN_SELECTOR).count() > 0:
                 logger.info("vote on IP cooldown (modal shows cooldown state)")
-                return False
+                return SiteRunResult(
+                    "skipped",
+                    "IP adresa je na webu stále v cooldownu.",
+                )
 
             logger.debug("asserting we are on the vote page")
             self._assert_on_vote_page(page, url)
@@ -200,21 +205,28 @@ class CraftList:
                 alert_text = (alert.text_content() or "").strip()
 
                 if "alert-success" in alert_classes:
-                    # Don't log success here — main.py logs it uniformly
-                    # across all sites based on the boolean return value.
-                    return True
+                    return SiteRunResult("success", "Hlas byl webem potvrzen.")
                 elif "alert-error" in alert_classes:
                     # Cooldown alert observed format:
                     # "Další možný hlas za tento server můžeš odeslat DD.MM.YYYY HH:MM"
                     # Not parsed — next run's get_vote_info() decides eligibility.
                     logger.info("vote on cooldown: %s", alert_text)
-                    return False
+                    return SiteRunResult(
+                        "skipped",
+                        f"Cooldown: {alert_text}",
+                    )
                 else:
                     logger.warning("unknown alert classes=%r text=%r", alert_classes, alert_text)
-                    return False
+                    return SiteRunResult(
+                        "failed",
+                        f"Web vrátil neznámou odpověď: {alert_text or '(prázdná odpověď)'}",
+                    )
             except Exception:
                 logger.warning("no alert appeared after vote click")
-                return False
+                return SiteRunResult(
+                    "failed",
+                    "Po odeslání hlasu se nezobrazilo potvrzení.",
+                )
         finally:
             page.close()
 

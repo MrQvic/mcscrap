@@ -1,3 +1,3 @@
-from .models import VoteInfo
+from .models import SiteRunResult, VoteInfo
 
-__all__ = ["VoteInfo"]
+__all__ = ["SiteRunResult", "VoteInfo"]

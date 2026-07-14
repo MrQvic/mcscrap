@@ -6,7 +6,7 @@ import httpx
 from playwright.sync_api import BrowserContext
 
 from ..http import http_get
-from ..models import VoteInfo
+from ..models import SiteRunResult, VoteInfo
 from ..config import CAPTCHA_TIMEOUT_MS
 
 logger = logging.getLogger("mc.list")
@@ -82,14 +82,11 @@ class MinecraftList:
                     "page may be broken or layout changed."
                 )
 
-    def vote(self, context: BrowserContext, nickname: str) -> bool:
+    def vote(self, context: BrowserContext, nickname: str) -> SiteRunResult:
         """
         Phase B: cast a vote for `nickname` using the shared browser context.
 
-        Returns:
-          - True  -> vote accepted (success alert detected)
-          - False -> vote rejected on cooldown, captcha failed, missing alert,
-                     or any other unexpected response
+        Returns a structured result with the outcome and a human-readable detail.
 
         Flow:
           1. Open vote page with nickname in query string.
@@ -130,22 +127,28 @@ class MinecraftList:
                 alert_text = alert.text_content() or ""
 
                 if "Tvůj hlas bude zpracován" in alert_text:
-                    # Don't log success here — main.py logs it uniformly
-                    # across all sites based on the boolean return value.
-                    return True
+                    return SiteRunResult("success", "Hlas byl webem potvrzen.")
                 elif "Již si hlasoval" in alert_text:
                     # Cooldown alert observed format:
                     # "Již si hlasoval. Znovu můžeš hlasovat v DD.MM.YYYY HH:MM:SS"
                     # (full local datetime, no timezone). We no longer parse it;
                     # the next run's get_vote_info() will decide eligibility
                     # before attempting another vote.
-                    logger.info("vote on cooldown: %s", alert_text.strip())
-                    return False
+                    detail = alert_text.strip()
+                    logger.info("vote on cooldown: %s", detail)
+                    return SiteRunResult("skipped", f"Cooldown: {detail}")
                 else:
-                    logger.warning("unknown alert text: %r", alert_text.strip())
-                    return False
+                    detail = alert_text.strip()
+                    logger.warning("unknown alert text: %r", detail)
+                    return SiteRunResult(
+                        "failed",
+                        f"Web vrátil neznámou odpověď: {detail or '(prázdná odpověď)'}",
+                    )
             except Exception:
                 logger.warning("no alert appeared after vote click")
-                return False
+                return SiteRunResult(
+                    "failed",
+                    "Po odeslání hlasu se nezobrazilo potvrzení.",
+                )
         finally:
             page.close()

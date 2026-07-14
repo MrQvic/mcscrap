@@ -7,7 +7,7 @@ from playwright.sync_api import BrowserContext
 
 from ..http import http_get
 from ..config import CAPTCHA_TIMEOUT_MS
-from ..models import VoteInfo
+from ..models import SiteRunResult, VoteInfo
 
 logger = logging.getLogger("mc.czechcraft")
 
@@ -87,21 +87,23 @@ class CzechCraft:
                     "page may be broken or layout changed."
                 )
 
-    def vote(self, context: BrowserContext, nickname: str) -> bool:
+    def vote(self, context: BrowserContext, nickname: str) -> SiteRunResult:
         """
         Phase B: cast a vote for `nickname` using the shared browser context.
+
+        Returns a structured result with the outcome and a human-readable detail.
 
         Flow:
           1. Open vote page with nickname in query string.
           2. Short-circuit: if the page shows a pre-vote cooldown notice
-             instead of the form, return False without attempting captcha.
+             instead of the form, return a skipped result without attempting captcha.
           3. Defensive check: assert we're on the correct page with expected elements present.
           4. Tick the GDPR / consent checkbox.
           5. Wait for the reCAPTCHA iframe, then poll until Nopecha (or a human
              in debug mode) marks it as solved.
           6. Click the vote/submit button.
-          7. Wait for the result alert and dispatch on its CSS class:
-             alert-success -> True, alert-error -> False (cooldown), other -> False.
+          7. Wait for the result alert and classify it as success, cooldown,
+             or failure.
         """
         page = context.new_page()
         try:
@@ -115,7 +117,10 @@ class CzechCraft:
             # since the page is fine, just not in a votable state.
             if page.locator(COOLDOWN_NOTICE_SELECTOR).count() > 0:
                 logger.info("vote on cooldown (pre-vote notice present)")
-                return False
+                return SiteRunResult(
+                    "skipped",
+                    "Web stále zobrazuje cooldown před hlasováním.",
+                )
 
             logger.debug("asserting we are on the vote page")
             self._assert_on_vote_page(page, url)
@@ -141,19 +146,26 @@ class CzechCraft:
                 alert_text = (alert.text_content() or "").strip()
 
                 if "alert-success" in alert_classes:
-                    # Don't log success here — main.py logs it uniformly
-                    # across all sites based on the boolean return value.
-                    return True
+                    return SiteRunResult("success", "Hlas byl webem potvrzen.")
                 elif "alert-error" in alert_classes:
                     # Post-submit cooldown alert (e.g. "Již si hlasoval.").
                     # Not parsed — next run's get_vote_info() decides eligibility.
                     logger.info("vote rejected: %s", alert_text)
-                    return False
+                    return SiteRunResult(
+                        "skipped",
+                        f"Web hlas odmítl kvůli cooldownu: {alert_text}",
+                    )
                 else:
                     logger.warning("unknown alert classes=%r text=%r", alert_classes, alert_text)
-                    return False
+                    return SiteRunResult(
+                        "failed",
+                        f"Web vrátil neznámou odpověď: {alert_text or '(prázdná odpověď)'}",
+                    )
             except Exception:
                 logger.warning("no alert appeared after vote click")
-                return False
+                return SiteRunResult(
+                    "failed",
+                    "Po odeslání hlasu se nezobrazilo potvrzení.",
+                )
         finally:
             page.close()

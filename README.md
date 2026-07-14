@@ -104,7 +104,10 @@ NICK=YourNickHere               # Your Minecraft username
 DEBUG=false                     # Set to true to show the browser on your real display
 CAPTCHA_TIMEOUT_MS=30000        # How long to wait for captcha solve (ms), default 30000
 HTTP_TIMEOUT_S=15               # HTTP request timeout (seconds), default 15
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...  # Optional run summaries
 ```
+
+When `DISCORD_WEBHOOK_URL` is configured, the bot sends one Discord summary after each voting run. Each site is marked as successful, skipped (for example because of a cooldown), or failed with the detected reason. Webhook delivery failures are logged locally and never interrupt voting.
 
 Also update the server slugs in the `sites` list in `main.py` if you're voting for a different server.
 

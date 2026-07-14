@@ -24,3 +24,6 @@ HTTP_TIMEOUT_S: int = _get_int("HTTP_TIMEOUT_S", 15)
 # Logging level for the entire app. One of: DEBUG, INFO, WARNING, ERROR, CRITICAL.
 # Use DEBUG when investigating per-step scraper flow; INFO is fine for steady state.
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# Optional Discord webhook for one summary message after each voting run.
+DISCORD_WEBHOOK_URL: str | None = os.getenv("DISCORD_WEBHOOK_URL", "").strip() or None

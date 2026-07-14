@@ -7,7 +7,7 @@ from playwright.sync_api import BrowserContext
 
 from ..http import http_get
 from ..config import CAPTCHA_TIMEOUT_MS
-from ..models import VoteInfo
+from ..models import SiteRunResult, VoteInfo
 
 logger = logging.getLogger("mc.servery")
 
@@ -75,14 +75,11 @@ class MinecraftServery:
                 "page may be broken or layout changed."
             )
 
-    def vote(self, context: BrowserContext, nickname: str) -> bool:
+    def vote(self, context: BrowserContext, nickname: str) -> SiteRunResult:
         """
         Phase B: cast a vote for `nickname` using the shared browser context.
 
-        Returns:
-          - True  -> vote accepted (success popup detected)
-          - False -> vote rejected on cooldown, captcha failed, missing popup,
-                     or any other unexpected response
+        Returns a structured result with the outcome and a human-readable detail.
 
         Flow:
           1. Open the vote page with nickname in the query string.
@@ -131,21 +128,30 @@ class MinecraftServery:
                     # (HH:MM only, no date, no timezone — server local time).
                     # We no longer parse this; the next run's get_vote_info()
                     # will decide eligibility before attempting another vote.
-                    logger.info("vote on cooldown: %s", notification_text.strip())
-                    return False
+                    detail = notification_text.strip()
+                    logger.info("vote on cooldown: %s", detail)
+                    return SiteRunResult("skipped", f"Cooldown: {detail}")
                 elif "byl úspěšně odeslán" in notification_text:
-                    # Don't log success here — main.py logs it uniformly
-                    # across all sites based on the boolean return value.
-                    return True
+                    return SiteRunResult("success", "Hlas byl webem potvrzen.")
                 elif "Pole captcha je povinné" in notification_text:
                     logger.error("captcha bypass unsuccessful")
-                    return False
+                    return SiteRunResult(
+                        "failed",
+                        "Web odmítl hlas, protože captcha nebyla úspěšně vyřešena.",
+                    )
                 else:
-                    logger.warning("unknown popup text: %r", notification_text.strip())
-                    return False
+                    detail = notification_text.strip()
+                    logger.warning("unknown popup text: %r", detail)
+                    return SiteRunResult(
+                        "failed",
+                        f"Web vrátil neznámou odpověď: {detail or '(prázdná odpověď)'}",
+                    )
 
             except Exception:
                 logger.warning("no notification popup detected after click")
-                return False
+                return SiteRunResult(
+                    "failed",
+                    "Po odeslání hlasu se nezobrazilo potvrzení.",
+                )
         finally:
             page.close()

@@ -7,8 +7,9 @@ from dotenv import load_dotenv
 from patchright.sync_api import sync_playwright
 
 from scrapers.browser import BrowserManager
+from scrapers.discord import send_run_summary
 from scrapers.logger import setup_logging
-from scrapers.models import VoteInfo
+from scrapers.models import SiteRunResult, VoteInfo
 from scrapers.sites import CraftList, CzechCraft, MinecraftList, MinecraftServery
 
 load_dotenv()
@@ -28,7 +29,7 @@ SITE_LOGGER_NAMES = {
 }
 
 # Total attempts per site per run. The retry covers transient captcha-solver
-# failures (NopeCHA timeout, missed Turnstile token, etc.). False returns
+# failures (NopeCHA timeout, missed Turnstile token, etc.). Structured results
 # are NOT retried — vote() got a definitive answer from the site and another
 # attempt would just burn a captcha credit.
 MAX_VOTE_ATTEMPTS = 2
@@ -55,6 +56,12 @@ def _site_logger(name: str) -> logging.Logger:
     return logging.getLogger(SITE_LOGGER_NAMES.get(name, f"mc.{name.lower()}"))
 
 
+def _describe_exception(error: Exception) -> str:
+    """Format an exception without losing useful type information."""
+    message = str(error).strip()
+    return f"{type(error).__name__}: {message}" if message else type(error).__name__
+
+
 def _should_vote(info: VoteInfo | None) -> bool:
     """
     Decide whether to attempt a vote on a site given its current info.
@@ -70,21 +77,25 @@ def _should_vote(info: VoteInfo | None) -> bool:
     return datetime.now() >= info.next_vote_at
 
 
-def _vote_with_retry(site, context, nickname: str, site_log: logging.Logger) -> bool:
+def _vote_with_retry(
+    site,
+    context,
+    nickname: str,
+    site_log: logging.Logger,
+) -> SiteRunResult:
     """
     Call site.vote() up to MAX_VOTE_ATTEMPTS times, retrying on exceptions.
 
-    Returns the bool from a successful attempt, or False if all attempts
-    raised. NotImplementedError is not retried (stub scraper). False returns
-    are not retried either (the site responded definitively — we don't want
-    to burn another captcha just to get the same answer).
+    A structured result is returned immediately because it is a definitive site
+    response. NotImplementedError is not retried. If all attempts raise, the
+    final exception is included in the run summary.
     """
     for attempt in range(1, MAX_VOTE_ATTEMPTS + 1):
         try:
-            return bool(site.vote(context, nickname))
+            return site.vote(context, nickname)
         except NotImplementedError:
             site_log.warning("vote() not implemented yet")
-            return False
+            return SiteRunResult("failed", "Hlasování pro tento web není implementované.")
         except Exception as e:
             if attempt < MAX_VOTE_ATTEMPTS:
                 site_log.warning(
@@ -97,7 +108,15 @@ def _vote_with_retry(site, context, nickname: str, site_log: logging.Logger) -> 
                     "vote attempt %d/%d failed: %s; giving up",
                     attempt, MAX_VOTE_ATTEMPTS, e,
                 )
-    return False
+                return SiteRunResult(
+                    "failed",
+                    (
+                        f"Hlasování selhalo i po {MAX_VOTE_ATTEMPTS} pokusech: "
+                        f"{_describe_exception(e)}"
+                    ),
+                )
+
+    return SiteRunResult("failed", "Hlasování skončilo bez výsledku.")
 
 
 def _sleep_until(target: datetime, chunk_s: float = 60.0) -> None:
@@ -136,7 +155,7 @@ def _sleep_until(target: datetime, chunk_s: float = 60.0) -> None:
             )
 
 
-def main() -> None:
+def main(run_results: dict[str, SiteRunResult]) -> None:
     # Phase A: cheap lookup per site, no browser involved.
     infos: dict[str, VoteInfo | None] = {}
     for site in SITES:
@@ -144,32 +163,56 @@ def main() -> None:
         try:
             infos[name] = site.get_vote_info(NICK)
         except Exception as e:
+            reason = _describe_exception(e)
             _site_logger(name).error("get_vote_info failed: %s", e)
             infos[name] = None
+            run_results[name] = SiteRunResult(
+                "failed",
+                f"Kontrola dostupnosti hlasování selhala: {reason}",
+            )
 
     for name, info in infos.items():
         site_log = _site_logger(name)
         if info is None:
             site_log.warning("player not found / unavailable")
+            run_results.setdefault(
+                name,
+                SiteRunResult("failed", "Hráč nebyl nalezen nebo je web nedostupný."),
+            )
         else:
             site_log.info("votes=%s next_vote_at=%s", info.votes, info.next_vote_at)
+            if info.next_vote_at is not None and datetime.now() < info.next_vote_at:
+                run_results[name] = SiteRunResult(
+                    "skipped",
+                    f"Cooldown do {info.next_vote_at.strftime('%Y-%m-%d %H:%M:%S')}.",
+                )
 
-    # Phase B: shared browser context across all sites.
+    # Phase B: shared browser context across sites that are ready to vote.
+    sites_to_vote = []
+    for site in SITES:
+        name = type(site).__name__
+        if name in run_results or not _should_vote(infos.get(name)):
+            _site_logger(name).info("skipping vote")
+        else:
+            sites_to_vote.append(site)
+
+    if not sites_to_vote:
+        return
+
     # Sequential calls respect the NopeCHA basic 2-concurrent-connection limit.
     with sync_playwright() as p:
         with BrowserManager(p) as context:
-            for site in SITES:
+            for site in sites_to_vote:
                 name = type(site).__name__
                 site_log = _site_logger(name)
-
-                if not _should_vote(infos.get(name)):
-                    site_log.info("skipping vote")
-                    continue
-
-                if _vote_with_retry(site, context, NICK, site_log):
+                result = _vote_with_retry(site, context, NICK, site_log)
+                run_results[name] = result
+                if result.status == "success":
                     site_log.info("vote successful")
+                elif result.status == "skipped":
+                    site_log.info("vote skipped: %s", result.detail)
                 else:
-                    site_log.warning("vote failed or unconfirmed")
+                    site_log.warning("vote failed: %s", result.detail)
 
 
 def _startup_sleep_if_needed() -> None:
@@ -229,18 +272,54 @@ if __name__ == "__main__":
     try:
         while True:
             run_started_at = datetime.now()
+            run_results: dict[str, SiteRunResult] = {}
             logger.info(
                 "=== Run started at %s ===",
                 run_started_at.strftime("%Y-%m-%d %H:%M:%S"),
             )
+
+            crash_reason: str | None = None
             try:
-                main()
-            except Exception:
+                main(run_results)
+            except Exception as e:
                 # Catch Exception (not BaseException) so KeyboardInterrupt
                 # propagates up to the outer try and exits cleanly.
+                crash_reason = _describe_exception(e)
                 logger.exception("!!! Run crashed")
 
-            next_run_at = datetime.now() + timedelta(seconds=SLEEP_BETWEEN_RUNS_S)
+            missing_names = [
+                type(site).__name__
+                for site in SITES
+                if type(site).__name__ not in run_results
+            ]
+            for name in missing_names:
+                run_results[name] = SiteRunResult(
+                    "failed",
+                    (
+                        f"Běh byl přerušen: {crash_reason}"
+                        if crash_reason
+                        else "Web nevrátil výsledek hlasování."
+                    ),
+                )
+
+            run_finished_at = datetime.now()
+            next_run_at = run_finished_at + timedelta(seconds=SLEEP_BETWEEN_RUNS_S)
+            ordered_results = {
+                type(site).__name__: run_results[type(site).__name__]
+                for site in SITES
+            }
+            if crash_reason and not missing_names:
+                ordered_results["Běh"] = SiteRunResult(
+                    "failed",
+                    f"Neočekávaná chyba běhu: {crash_reason}",
+                )
+            send_run_summary(
+                ordered_results,
+                started_at=run_started_at,
+                finished_at=run_finished_at,
+                next_run_at=next_run_at,
+            )
+
             logger.info(
                 "=== Run finished. Sleeping until %s (%.1f min) ===",
                 next_run_at.strftime("%Y-%m-%d %H:%M:%S"),
